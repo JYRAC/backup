@@ -1,0 +1,73 @@
+name: Backup Supabase
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: backup
+  cancel-in-progress: false
+
+env:
+  PG_CLIENT_VERSION: "17"
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pg_dump
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y "postgresql-client-${PG_CLIENT_VERSION}"
+
+      - name: Dump and encrypt
+        env:
+          BACKUP_CERT_PEM: ${{ secrets.BACKUP_CERT_PEM }}
+          SERVICES_PW: ${{ secrets.BACKUP_SERVICES_DB_PASSWORD }}
+          OPENBAO_PW: ${{ secrets.BACKUP_OPENBAO_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          STAMP=$(date -u +%Y%m%d-%H%M)
+          echo "STAMP=$STAMP" >> "$GITHUB_ENV"
+          PGDUMP="/usr/lib/postgresql/${PG_CLIENT_VERSION}/bin/pg_dump"
+          HOST=aws-0-us-west-2.pooler.supabase.com
+          mkdir -p dumps
+          printf '%s\n' "$BACKUP_CERT_PEM" > cert.pem
+
+          # Project Services (casdoor=public / directus / vikunja)
+          PGPASSWORD="$SERVICES_PW" "$PGDUMP" \
+            "host=$HOST port=5432 dbname=postgres user=backup_ro.kuajmlczxracqobxkzee sslmode=require" \
+            --schema=public --schema=directus --schema=vikunja --no-privileges \
+            > services.sql
+          grep -q "CREATE TABLE" services.sql
+          gzip -c services.sql | openssl cms -encrypt -binary -aes-256-cbc \
+            -outform DER -out "dumps/services-${STAMP}.sql.gz.cms" cert.pem
+
+          # Project OpenBao (storage)
+          PGPASSWORD="$OPENBAO_PW" "$PGDUMP" \
+            "host=$HOST port=5432 dbname=postgres user=backup_ro.ywoiducfxbazqiwovobd sslmode=require" \
+            --schema=public --no-privileges \
+            > openbao.sql
+          grep -q "vault_kv_store" openbao.sql
+          gzip -c openbao.sql | openssl cms -encrypt -binary -aes-256-cbc \
+            -outform DER -out "dumps/openbao-${STAMP}.sql.gz.cms" cert.pem
+
+          rm -f services.sql openbao.sql cert.pem
+          ls -l dumps | tail -n 4
+
+      - name: Commit encrypted dumps
+        run: |
+          git config user.name "backup-bot"
+          git config user.email "backup-bot@users.noreply.github.com"
+          git add dumps/
+          git commit -m "backup ${STAMP}"
+          git push
