@@ -48,7 +48,11 @@ jobs:
             "host=$HOST port=5432 dbname=postgres user=backup_ro.kuajmlczxracqobxkzee sslmode=require" \
             --schema=public --schema=directus --schema=vikunja --no-privileges \
             > services.sql
-          grep -q "CREATE TABLE" services.sql
+          echo "services: $(wc -c < services.sql) bytes, tables:"
+          grep -E '^CREATE TABLE' services.sql | sed 's/ (.*//' || true
+          if ! grep -q '^CREATE TABLE' services.sql; then
+            echo "ERROR: services dump has no tables"; exit 1
+          fi
           gzip -c services.sql | openssl cms -encrypt -binary -aes-256-cbc \
             -outform DER -out "dumps/services-${STAMP}.sql.gz.cms" cert.pem
 
@@ -57,7 +61,11 @@ jobs:
             "host=$HOST port=5432 dbname=postgres user=backup_ro.ywoiducfxbazqiwovobd sslmode=require" \
             --schema=public --no-privileges \
             > openbao.sql
-          grep -q "vault_kv_store" openbao.sql
+          echo "openbao: $(wc -c < openbao.sql) bytes, tables:"
+          grep -E '^CREATE TABLE' openbao.sql | sed 's/ (.*//' || true
+          if ! grep -q 'kv_store' openbao.sql; then
+            echo "ERROR: openbao dump has no kv_store table"; exit 1
+          fi
           gzip -c openbao.sql | openssl cms -encrypt -binary -aes-256-cbc \
             -outform DER -out "dumps/openbao-${STAMP}.sql.gz.cms" cert.pem
 
