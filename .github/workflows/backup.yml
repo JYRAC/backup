@@ -46,7 +46,7 @@ jobs:
           # Project Services (casdoor=public / directus / vikunja)
           PGPASSWORD="$SERVICES_PW" "$PGDUMP" \
             "host=$HOST port=5432 dbname=postgres user=backup_ro.kuajmlczxracqobxkzee sslmode=require" \
-            --schema=public --schema=directus --schema=vikunja --no-privileges \
+            --schema=public --schema=directus --schema=vikunja --schema=vaultwarden --no-privileges \
             > services.sql
           echo "services: $(wc -c < services.sql) bytes, tables:"
           grep -E '^CREATE TABLE' services.sql | sed 's/ (.*//' || true
